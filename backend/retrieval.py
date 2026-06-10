@@ -8,7 +8,7 @@ from backend.profile_store import list_facts
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-CHROMA_PATH = BASE_DIR / "chroma_db"
+CHROMA_PATH = Path(os.getenv("CHROMA_PATH", BASE_DIR / "chroma_db"))
 COLLECTION_NAME = "allyai_profile"
 _collection: Any | None = None
 _embedder: Any | None = None

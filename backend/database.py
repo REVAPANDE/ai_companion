@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DB_PATH = BASE_DIR / "allyAI.db"
+DB_PATH = Path(os.getenv("DATABASE_PATH", BASE_DIR / "allyAI.db"))
 
 
 def get_connection() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
