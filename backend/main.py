@@ -6,7 +6,7 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -66,12 +66,21 @@ class ImportRequest(BaseModel):
     messages: list[dict[str, Any]]
 
 
+class FrontendChatRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    model_key: str | None = None
+
+
+class ImportUrlRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
 
 
-@app.get("/")
+@app.get("/", response_model=None)
 def home() -> FileResponse | dict[str, str]:
     index = FRONTEND_DIR / "index.html"
     if index.exists():
@@ -172,3 +181,107 @@ def delete_memory_endpoint(fact_id: int) -> dict[str, bool]:
 @app.get("/api/memories/search")
 def search_memories_endpoint(q: str, limit: int = 5) -> list[dict[str, Any]]:
     return search_memories(q, limit)
+
+
+@app.get("/models")
+def models_endpoint() -> dict[str, list[dict[str, str]]]:
+    return {
+        "models": [
+            {"key": "llama-3.3-70b", "name": "Groq Llama 3.3 70B"},
+            {"key": "llama-3.1-8b", "name": "Groq Llama 3.1 8B"},
+            {"key": "mixtral-8x7b", "name": "Groq Mixtral 8x7B"},
+        ]
+    }
+
+
+def _groq_model_name(model_key: str | None) -> str | None:
+    models = {
+        "llama-3.3-70b": "llama-3.3-70b-versatile",
+        "llama-3.1-8b": "llama-3.1-8b-instant",
+        "mixtral-8x7b": "mixtral-8x7b-32768",
+    }
+    return models.get(model_key or "")
+
+
+@app.post("/chat")
+def frontend_chat(request: FrontendChatRequest) -> StreamingResponse:
+    payload = ChatRequest(message=request.message, model=_groq_model_name(request.model_key))
+    result = chat(payload)
+    return StreamingResponse(iter([result["reply"]]), media_type="text/plain")
+
+
+@app.delete("/conversation")
+def clear_frontend_conversation() -> dict[str, bool]:
+    return {"cleared": True}
+
+
+@app.get("/conversations")
+def frontend_conversations() -> dict[str, list[dict[str, Any]]]:
+    return {"conversations": list_conversations()}
+
+
+@app.get("/conversations/{conversation_id}")
+def frontend_conversation(conversation_id: int) -> dict[str, Any]:
+    return conversation_endpoint(conversation_id)
+
+
+@app.delete("/conversations/{conversation_id}")
+def frontend_delete_conversation(conversation_id: int) -> dict[str, bool]:
+    return delete_conversation_endpoint(conversation_id)
+
+
+@app.get("/profile")
+def profile_endpoint() -> dict[str, str]:
+    from backend.profile_store import get_profile_summary
+
+    return {"profile": get_profile_summary()}
+
+
+@app.get("/profile/full")
+def full_profile_endpoint() -> dict[str, dict[str, list[dict[str, Any]]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {
+        "preferences": [],
+        "projects": [],
+        "skills": [],
+        "history": [],
+    }
+    for fact in list_facts():
+        grouped.setdefault(fact["category"], []).append(fact)
+    return {"profile": grouped}
+
+
+@app.post("/profile/fact")
+def add_profile_fact_endpoint(fact: ManualFact) -> dict[str, Any]:
+    return add_memory_endpoint(fact)
+
+
+@app.delete("/profile/fact/{fact_id}")
+def delete_profile_fact_endpoint(fact_id: int) -> dict[str, bool]:
+    return delete_memory_endpoint(fact_id)
+
+
+@app.get("/profile/export")
+def export_profile_endpoint() -> dict[str, Any]:
+    return {"facts": list_facts()}
+
+
+@app.post("/profile/import")
+def import_profile_endpoint(payload: dict[str, Any]) -> dict[str, str]:
+    facts = payload.get("facts", [])
+    if not isinstance(facts, list):
+        raise HTTPException(status_code=400, detail="facts must be a list")
+    ids = save_facts(facts)
+    saved = [memory for memory in list_facts() if memory["id"] in ids]
+    try:
+        upsert_facts_to_vector_store(saved)
+    except Exception:
+        pass
+    return {"message": f"Imported {len(ids)} memories"}
+
+
+@app.post("/import/url")
+def import_url_endpoint(_: ImportUrlRequest) -> dict[str, Any]:
+    raise HTTPException(
+        status_code=501,
+        detail="URL import is not implemented yet. Use /api/import with exported messages.",
+    )
